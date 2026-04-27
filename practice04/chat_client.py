@@ -1,18 +1,20 @@
 """
-Practice 03: 终端界面聊天客户端（带聊天记录总结和压缩功能）
+Practice 04: 终端界面聊天客户端（带AnythingLLM文档仓库访问功能）
 功能：
 1. 支持终端界面输入聊天内容
 2. 支持流式输出
 3. 支持历史聊天记录自动添加到上下文
 4. 当聊天超过5轮或上下文长度超过3k时，自动触发聊天记录总结和压缩
 5. 对于前70%左右的内容进行压缩，最后30%左右的内容保留原文
-6. 直到用户ctrl+c退出终端，否则一直循环
+6. 支持访问AnythingLLM文档仓库
+7. 直到用户ctrl+c退出终端，否则一直循环
 """
 
 import http.client
 import json
 import os
 import time
+import subprocess
 from urllib.parse import urlparse
 
 
@@ -361,6 +363,60 @@ def read_chat_log():
         return f"读取聊天日志文件时出错: {str(e)}"
 
 
+def anythingllm_query(message, api_key, workspace_slug):
+    """
+    使用subprocess模块调用curl命令，访问AnythingLLM的聊天API接口
+    
+    Args:
+        message: 要发送的查询消息
+        api_key: AnythingLLM的API密钥
+        workspace_slug: AnythingLLM的工作区slug
+    
+    Returns:
+        从AnythingLLM返回的响应内容
+    """
+    # 构建API URL - 使用正确的路径格式
+    url = f"http://localhost:3001/api/v1/workspace/{workspace_slug}/chat"
+    
+    # 构建请求数据
+    payload = json.dumps({
+        "message": message
+    })
+    
+    # 构建curl命令
+    curl_command = [
+        "curl",
+        "-X", "POST",
+        url,
+        "-H", f"Authorization: Bearer {api_key}",
+        "-H", "Content-Type: application/json",
+        "-d", payload
+    ]
+    
+    try:
+        # 执行curl命令
+        print("正在访问AnythingLLM API...")
+        result = subprocess.run(
+            curl_command,
+            capture_output=True,
+            text=True,
+            encoding='utf-8'
+        )
+        
+        # 检查命令是否成功执行
+        if result.returncode == 0:
+            # 解析响应
+            try:
+                response_data = json.loads(result.stdout)
+                return json.dumps({"status": "success", "data": response_data}, ensure_ascii=False)
+            except json.JSONDecodeError:
+                return json.dumps({"status": "error", "message": f"响应解析失败: {result.stdout}"}, ensure_ascii=False)
+        else:
+            return json.dumps({"status": "error", "message": f"curl命令执行失败: {result.stderr}"}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+
 def main():
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env_path = os.path.join(project_root, ".env")
@@ -373,16 +429,23 @@ def main():
     model = env.get("OPENAI_MODEL")
     temperature = float(env.get("TEMPERATURE", 0.7))
     max_tokens = int(env.get("MAX_TOKENS", 1000))
+    anythingllm_api_key = env.get("ANYTHINGLLM_API_KEY")
+    anythingllm_workspace_slug = env.get("ANYTHINGLLM_WORKSPACE_SLUG")
     
     print(f"\n配置信息:")
     print(f"  - Base URL: {base_url}")
     print(f"  - Model: {model}")
     print(f"  - Temperature: {temperature}")
     print(f"  - Max Tokens: {max_tokens}")
+    print(f"  - AnythingLLM API Key: {'已配置' if anythingllm_api_key else '未配置'}")
+    print(f"  - AnythingLLM Workspace Slug: {anythingllm_workspace_slug if anythingllm_workspace_slug else '未配置'}")
     
     # 初始化聊天历史
     messages = [
-        {"role": "system", "content": "你是一个有帮助的AI助手。"}
+        {
+            "role": "system", 
+            "content": "你是一个有帮助的AI助手。当用户提到'文档仓库'、'文件仓库'或'仓库'时，请使用anythingllm_query工具来查询相关信息。"
+        }
     ]
     
     # 初始化聊天轮数计数器
@@ -392,7 +455,8 @@ def main():
     print(f"输入消息后按回车发送，按 Ctrl+C 退出。")
     print(f"当聊天超过5轮或上下文长度超过3k时，系统会自动总结和压缩聊天记录。")
     print(f"每五次聊天，系统会自动提取关键信息并记录到本地文件。")
-    print(f"使用 '/search' 开头或表达 '查找聊天历史' 可以查询历史聊天记录。\n")
+    print(f"使用 '/search' 开头或表达 '查找聊天历史' 可以查询历史聊天记录。")
+    print(f"当提到 '文档仓库'、'文件仓库' 或 '仓库' 时，系统会自动查询AnythingLLM文档仓库。\n")
     
     try:
         while True:
@@ -418,7 +482,55 @@ def main():
                         need_search = True
                         break
             
-            if need_search:
+            # 检查是否需要调用AnythingLLM查询
+            need_anythingllm = False
+            anythingllm_keywords = ["文档仓库", "文件仓库", "仓库"]
+            # 检查用户输入是否以/anything开头
+            if user_input.startswith("/anything"):
+                need_anythingllm = True
+            else:
+                # 检查用户输入是否包含相关关键词
+                for keyword in anythingllm_keywords:
+                    if keyword in user_input:
+                        need_anythingllm = True
+                        break
+            
+            if need_anythingllm and anythingllm_api_key and anythingllm_workspace_slug:
+                # 调用AnythingLLM查询
+                anythingllm_response = anythingllm_query(user_input, anythingllm_api_key, anythingllm_workspace_slug)
+                
+                # 解析AnythingLLM响应
+                try:
+                    response_data = json.loads(anythingllm_response)
+                    if response_data.get("status") == "success":
+                        anythingllm_content = json.dumps(response_data.get("data", {}), ensure_ascii=False, indent=2)
+                    else:
+                        anythingllm_content = response_data.get("message", "查询失败")
+                except json.JSONDecodeError:
+                    anythingllm_content = anythingllm_response
+                
+                # 构建包含AnythingLLM响应的消息
+                anythingllm_messages = [
+                    {"role": "system", "content": "你是一个有帮助的AI助手。请根据AnythingLLM返回的信息，为用户提供详细的回答。"},
+                    {"role": "user", "content": f"用户请求: {user_input}\n\n从文档仓库获取的信息:\n{anythingllm_content}"}
+                ]
+                
+                print("AI: ", end="", flush=True)
+                
+                # 调用API获取响应
+                content, stats = call_llm_api_stream(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=model,
+                    messages=anythingllm_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+                
+                # 添加用户消息和AI响应到聊天历史
+                messages.append({"role": "user", "content": user_input})
+                messages.append({"role": "assistant", "content": content})
+            elif need_search:
                 # 读取聊天日志
                 chat_log = read_chat_log()
                 

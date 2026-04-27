@@ -61,7 +61,8 @@ def call_llm_api_stream(base_url, api_key, model, messages, temperature=0.7, max
     
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
+        "Authorization": f"Bearer {api_key}",
+        "X-Custom-Header": "example-value"
     }
     
     payload = {
