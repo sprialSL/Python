@@ -63,3 +63,6 @@ checkpoints/
 *.pickle
 data/raw/
 data/processed/
+
+# Subprojects
+Itest_Exam_helper/
